@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Arrow Master - Archer Challenge</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body {
+      background: radial-gradient(circle at 50% 30%, #1e293b 0%, #0f172a 100%);
+      color: #f8fafc;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      touch-action: none;
+    }
+    #gameContainer {
+      position: relative;
+      width: 100vw;
+      max-width: 900px;
+      height: 100vh;
+      max-height: 600px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+      border-radius: 12px;
+      overflow: hidden;
+      background: linear-gradient(to bottom, #0ea5e9 0%, #38bdf8 40%, #7dd3fc 70%, #22c55e 70%, #15803d 100%);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .hud {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      right: 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+      font-weight: 700;
+      font-size: 1.1rem;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.6);
+    }
+    .stat-badge {
+      background: rgba(15, 23, 42, 0.65);
+      backdrop-filter: blur(8px);
+      padding: 8px 16px;
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    #overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      text-align: center;
+      padding: 20px;
+    }
+    #overlay h1 {
+      font-size: 2.8rem;
+      color: #38bdf8;
+      margin-bottom: 10px;
+      text-shadow: 0 4px 12px rgba(56, 189, 248, 0.4);
+    }
+    #overlay p {
+      font-size: 1.1rem;
+      color: #cbd5e1;
+      max-width: 480px;
+      margin-bottom: 25px;
+      line-height: 1.5;
+    }
+    .btn-play {
+      background: linear-gradient(135deg, #0ea5e9, #0284c7);
+      color: white;
+      border: none;
+      padding: 14px 40px;
+      font-size: 1.25rem;
+      font-weight: bold;
+      border-radius: 30px;
+      cursor: pointer;
+      box-shadow: 0 10px 25px rgba(14, 165, 233, 0.5);
+      transition: all 0.2s ease;
+      pointer-events: auto;
+    }
+    .btn-play:hover {
+      transform: translateY(-2px) scale(1.04);
+      box-shadow: 0 15px 30px rgba(14, 165, 233, 0.7);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="gameContainer">
+    <canvas id="gameCanvas"></canvas>
+    
+    <div class="hud">
+      <div class="stat-badge">🏹 Arrows: <span id="arrowsCount">10</span></div>
+      <div class="stat-badge">🎯 Score: <span id="scoreText">0</span></div>
+      <div class="stat-badge">🏆 High: <span id="highScoreText">0</span></div>
+    </div>
+
+    <div id="overlay">
+      <h1 id="overlayTitle">🎯 Arrow Master</h1>
+      <p id="overlayDesc">Drag back from the bow to aim and adjust power, then release to shoot moving targets!</p>
+      <button class="btn-play" id="startBtn" onclick="startGame()">Play Now</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const overlay = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlayTitle');
+    const overlayDesc = document.getElementById('overlayDesc');
+    const startBtn = document.getElementById('startBtn');
+    const scoreText = document.getElementById('scoreText');
+    const highScoreText = document.getElementById('highScoreText');
+    const arrowsCount = document.getElementById('arrowsCount');
+
+    let width, height;
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      width = canvas.width;
+      height = canvas.height;
+    }
+    window.addEventListener('resize', resize);
+
+    // Audio FX using Web Audio API
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playBeep(freq, type, duration, gainVal = 0.1) {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      gain.gain.setValueAtTime(gainVal, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration);
+    }
+
+    // State
+    let isPlaying = false;
+    let score = 0;
+    let arrows = 10;
+    let highScore = localStorage.getItem('arrow_high_score') || 0;
+    highScoreText.innerText = highScore;
+
+    // Archer / Bow Position
+    const bow = { x: 70, y: 0, size: 45 };
+    let isDragging = false;
+    let dragPos = { x: 0, y: 0 };
+
+    // Entities
+    let flyingArrows = [];
+    let targets = [];
+    let particles = [];
+
+    class Target {
+      constructor() {
+        this.radius = 24 + Math.random() * 12;
+        this.x = width - this.radius - 20;
+        this.y = 50 + Math.random() * (height - 180);
+        this.speedY = (Math.random() * 2 + 1.2) * (Math.random() > 0.5 ? 1 : -1);
+        this.points = Math.round(50 - this.radius);
+      }
+      update() {
+        this.y += this.speedY;
+        if (this.y - this.radius < 30 || this.y + this.radius > height - 120) {
+          this.speedY *= -1;
+        }
+      }
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        // Rings
+        const colors = ['#ef4444', '#ffffff', '#ef4444', '#facc15'];
+        for (let i = colors.length - 1; i >= 0; i--) {
+          ctx.beginPath();
+          ctx.arc(0, 0, this.radius * ((i + 1) / colors.length), 0, Math.PI * 2);
+          ctx.fillStyle = colors[i];
+          ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = '#334155';
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    class Arrow {
+      constructor(x, y, vx, vy) {
+        this.x = x;
+        this.y = y;
+        this.vx = vx;
+        this.vy = vy;
+        this.length = 42;
+        this.active = true;
+      }
+      update() {
+        this.vy += 0.22; // Gravity
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Ground hit
+        if (this.y > height - 70) {
+          this.active = false;
+          playBeep(120, 'triangle', 0.1, 0.05);
+        }
+        // Offscreen
+        if (this.x > width + 50 || this.x < -50) {
+          this.active = false;
+        }
+      }
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        const angle = Math.atan2(this.vy, this.vx);
+        ctx.rotate(angle);
+
+        // Arrow Shaft
+        ctx.strokeStyle = '#78350f';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(-this.length, 0);
+        ctx.lineTo(0, 0);
+        ctx.stroke();
+
+        // Arrow Head
+        ctx.fillStyle = '#94a3b8';
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(-10, -5);
+        ctx.lineTo(-6, 0);
+        ctx.lineTo(-10, 5);
+        ctx.closePath();
+        ctx.fill();
+
+        // Feathers
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath();
+        ctx.moveTo(-this.length, 0);
+        ctx.lineTo(-this.length - 8, -4);
+        ctx.lineTo(-this.length - 4, 0);
+        ctx.lineTo(-this.length - 8, 4);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.restore();
+      }
+    }
+
+    function spawnParticle(x, y, color) {
+      for (let i = 0; i < 14; i++) {
+        particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 6,
+          vy: (Math.random() - 0.5) * 6,
+          radius: Math.random() * 3.5 + 1.5,
+          color,
+          alpha: 1
+        });
+      }
+    }
+
+    function startGame() {
+      resize();
+      score = 0;
+      arrows = 10;
+      scoreText.innerText = score;
+      arrowsCount.innerText = arrows;
+      flyingArrows = [];
+      particles = [];
+      targets = [new Target(), new Target()];
+      bow.y = height / 2;
+      isPlaying = true;
+      overlay.style.display = 'none';
+      playBeep(440, 'sine', 0.15, 0.15);
+    }
+
+    function gameOver() {
+      isPlaying = false;
+      if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('arrow_high_score', highScore);
+        highScoreText.innerText = highScore;
+      }
+      overlayTitle.innerText = "Game Over!";
+      overlayDesc.innerText = `Great shooting! You scored ${score} points!`;
+      startBtn.innerText = "Play Again";
+      overlay.style.display = 'flex';
+      playBeep(220, 'sawtooth', 0.4, 0.2);
+    }
+
+    // Input Handling
+    function handleStart(clientX, clientY) {
+      if (!isPlaying) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      if (Math.hypot(x - bow.x, y - bow.y) < 70) {
+        isDragging = true;
+        dragPos = { x, y };
+      }
+    }
+
+    function handleMove(clientX, clientY) {
+      if (!isDragging) return;
+      const rect = canvas.getBoundingClientRect();
+      dragPos = {
+        x: clientX - rect.left,
+        y: clientY - rect.top
+      };
+    }
+
+    function handleEnd() {
+      if (!isDragging) return;
+      isDragging = false;
+      const dx = bow.x - dragPos.x;
+      const dy = bow.y - dragPos.y;
+      const power = Math.min(Math.hypot(dx, dy), 120);
+      if (power > 15 && arrows > 0) {
+        const angle = Math.atan2(dy, dx);
+        const speed = power * 0.24;
+        flyingArrows.push(new Arrow(bow.x, bow.y, Math.cos(angle) * speed, Math.sin(angle) * speed));
+        arrows--;
+        arrowsCount.innerText = arrows;
+        playBeep(600 + power * 3, 'triangle', 0.12, 0.15);
+      }
+    }
+
+    // Mouse Listeners
+    canvas.addEventListener('mousedown', e => handleStart(e.clientX, e.clientY));
+    window.addEventListener('mousemove', e => handleMove(e.clientX, e.clientY));
+    window.addEventListener('mouseup', handleEnd);
+
+    // Touch Listeners
+    canvas.addEventListener('touchstart', e => {
+      if (e.touches.length > 0) handleStart(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+    window.addEventListener('touchmove', e => {
+      if (e.touches.length > 0) handleMove(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+    window.addEventListener('touchend', handleEnd);
+
+    // Game Loop
+    function loop() {
+      ctx.clearRect(0, 0, width, height);
+
+      // Draw Clouds
+      ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+      ctx.beginPath();
+      ctx.arc(width * 0.3, 70, 35, 0, Math.PI * 2);
+      ctx.arc(width * 0.3 + 30, 60, 45, 0, Math.PI * 2);
+      ctx.arc(width * 0.3 + 60, 70, 35, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Ground
+      ctx.fillStyle = '#16a34a';
+      ctx.fillRect(0, height - 70, width, 70);
+      ctx.fillStyle = '#15803d';
+      ctx.fillRect(0, height - 60, width, 60);
+
+      // Bow & String
+      ctx.save();
+      ctx.translate(bow.x, bow.y);
+      let aimAngle = 0;
+      if (isDragging) {
+        aimAngle = Math.atan2(bow.y - dragPos.y, bow.x - dragPos.x);
+      }
+      ctx.rotate(aimAngle);
+
+      // Bow Arc
+      ctx.lineWidth = 5;
+      ctx.strokeStyle = '#854d0e';
+      ctx.beginPath();
+      ctx.arc(0, 0, bow.size, -Math.PI / 2.4, Math.PI / 2.4);
+      ctx.stroke();
+
+      // Bow String
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.beginPath();
+      const topY = -bow.size * Math.sin(Math.PI / 2.4);
+      const topX = bow.size * Math.cos(Math.PI / 2.4);
+      const botY = bow.size * Math.sin(Math.PI / 2.4);
+      const botX = bow.size * Math.cos(Math.PI / 2.4);
+
+      if (isDragging) {
+        const pull = Math.min(Math.hypot(bow.x - dragPos.x, bow.y - dragPos.y), 70);
+        ctx.moveTo(topX, topY);
+        ctx.lineTo(-pull, 0);
+        ctx.lineTo(botX, botY);
+      } else {
+        ctx.moveTo(topX, topY);
+        ctx.lineTo(botX, botY);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // Targets
+      targets.forEach(t => {
+        if (isPlaying) t.update();
+        t.draw();
+      });
+
+      // Arrows
+      flyingArrows.forEach((arr, i) => {
+        arr.update();
+        arr.draw();
+
+        // Hit Detection
+        targets.forEach(t => {
+          if (arr.active && Math.hypot(arr.x - t.x, arr.y - t.y) < t.radius) {
+            arr.active = false;
+            score += t.points;
+            scoreText.innerText = score;
+            spawnParticle(t.x, t.y, '#f59e0b');
+            playBeep(880, 'sine', 0.2, 0.25);
+            // Respawn Target
+            t.y = 50 + Math.random() * (height - 180);
+            t.speedY = (Math.random() * 2.5 + 1.5) * (Math.random() > 0.5 ? 1 : -1);
+          }
+        });
+
+        if (!arr.active) flyingArrows.splice(i, 1);
+      });
+
+      // Particles
+      particles.forEach((p, i) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= 0.025;
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, p.alpha);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        if (p.alpha <= 0) particles.splice(i, 1);
+      });
+
+      // Check End
+      if (isPlaying && arrows === 0 && flyingArrows.length === 0) {
+        gameOver();
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    resize();
+    loop();
+  </script>
+</body>
+</html>
